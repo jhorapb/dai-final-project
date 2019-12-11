@@ -15,6 +15,7 @@ global {
 	int indexSoldierAlliance2 <- 10;
 	int indexReserveSoldierAlliance1 <- 85;
 	int indexReserveSoldierAlliance2 <- 15;
+	bool battleIsHappening <- true;
 	
 	init {
 		// Alliance 1
@@ -138,17 +139,68 @@ species Commander skills:[moving] {
 species Soldier skills:[moving] {
 	
 	int alliance;
+	bool fighting;
 	bool inField;
 	bool initialPositionDefined;
 	point initialPosition;
+	point positionInFight;
+	point targetPoint;
 	rgb agentColor;
 	
 	init {
 		
 	}
 	
+	aspect base {
+		draw sphere(1.5) at: location color: agentColor;
+    }
+	
 	reflex doWander when: !inField {
 		do wander speed: 0.01;
+	}
+	
+	reflex moveToTarget when: battleIsHappening and inField and !fighting {
+		if (alliance = 1) {
+			targetPoint <- {100, location.y};
+		}
+		else {
+			targetPoint <- {0, location.y};
+		}
+		do goto target:targetPoint speed: rnd(0.05);
+	}
+	
+	reflex stopMoving when: inField {
+		ask Soldier {
+			point localLocation <- myself.location;
+			point enemyLocation <- self.location;
+			if (self.name != myself.name and localLocation distance_to enemyLocation <= 1) {
+				myself.fighting <- true;
+				myself.positionInFight <- location;
+				myself.targetPoint <- location;
+				self.fighting <- true;
+				self.positionInFight <- location;
+				self.targetPoint <- location;
+			}
+		}
+	}
+	
+	reflex fight when: fighting {
+		
+	}
+	
+	reflex moveInFight when: fighting {
+		if (targetPoint = positionInFight and location distance_to targetPoint <= 1) {
+			if (alliance = 1) {
+				targetPoint <- {location.x - 2, location.y};
+			}
+			else {
+				targetPoint <- {location.x + 2, location.y};
+			}
+		}
+		else if (location = targetPoint) {
+			targetPoint <- positionInFight;
+		}
+		do goto target:targetPoint speed: rnd(0.05);
 	}
 	
 	reflex initializePosition when: !initialPositionDefined {
@@ -173,11 +225,6 @@ species Soldier skills:[moving] {
 		initialPositionDefined <- true;
 		initialPosition <- location;
 	}
-	
-	aspect base {
-		draw sphere(1.5) at: location color: agentColor;
-    }
-	
 }
 
 species Medic skills:[moving] {

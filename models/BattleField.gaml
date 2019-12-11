@@ -16,6 +16,7 @@ global {
 	int indexReserveSoldierAlliance1 <- 85;
 	int indexReserveSoldierAlliance2 <- 15;
 	bool battleIsHappening <- true;
+	bool initiateBattleSent;
 	
 	init {
 		// Alliance 1
@@ -112,12 +113,18 @@ global {
 }
 
 
-species Commander skills:[moving] {
+species Commander skills:[moving, fipa] {
 	
 	int alliance;
+	int power <- rnd(8,10);
+	int health <- rnd(30,40);
+	bool battleInitiated;
+	float initialTime;
+	bool cycleZero <- false;
 	
 	init {
 		alliance <- alliance;
+		name <- "Commander";
 	}
 	
 	aspect base {
@@ -134,9 +141,24 @@ species Commander skills:[moving] {
 		do wander speed: 0.01;
 	}
 	
+	reflex sendInitiateBattle when: !battleInitiated {
+		write "ENTERED REFLEX";
+		if !cycleZero {
+			cycleZero <- true;
+			write "ENTERED cycleZero";
+			initialTime <- time;	
+			write "initialTime is " + initialTime;
+		}
+		if time - initialTime = 10{
+			do start_conversation with: [ to :: list(Soldier), protocol :: 'fipa-contract-net', 
+				performative :: 'inform', contents :: ["Fight!", alliance] ];
+			write "My name is " + name + " and I sent the message!" color:#red;
+			initiateBattleSent <- true;
+		}
+	}
 }
 
-species Soldier skills:[moving] {
+species Soldier skills:[moving, fipa] {
 	
 	int alliance;
 	bool fighting;
@@ -146,6 +168,7 @@ species Soldier skills:[moving] {
 	point positionInFight;
 	point targetPoint;
 	rgb agentColor;
+	list informsList;
 	
 	init {
 		
@@ -224,6 +247,18 @@ species Soldier skills:[moving] {
 		}
 		initialPositionDefined <- true;
 		initialPosition <- location;
+	}
+	
+	reflex receiveInitiateBattle {
+		if initiateBattleSent {
+			loop element over: informs {
+				if Commander(element.sender).name = "Commander" and element.contents[1] = alliance {
+					write "My name is " + name + " and I received the fight message!" color: #pink;
+					add element to: informsList;
+					do end_conversation with: [ message :: element, contents :: [] ];
+				}
+			}		
+		}
 	}
 }
 

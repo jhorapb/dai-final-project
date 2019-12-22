@@ -7,6 +7,12 @@
 
 model BattleField
 
+//READMEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE:
+//Works most of the time. The following things happen:
+//1. Sometimes when Soldiers go to replenish their bullets at Provisions, they decide to go out of bounds...for some reason. Y no tengo nada que le 
+//sume a X un valor positivo para que su targetPoint pase a ser por alla. 
+//2. Algunas veces los transports se quedan parados en vez de seguir al medico y no se por que. Pasa 1 de cada 3 veces.
+//3. La simulacion de los soldiers perdiendo Health y bullets la hice en notifyInjured. Dependo de ti para que esto ocurra luego de pelear y demas 
 
 global {
 	
@@ -41,7 +47,7 @@ global {
 			alliance <- 1;
 			location <- {5, 70};
 		}
-		create Provision number: 1 {
+		create Provisions number: 1 {
 			alliance <- 1;
 			location <- {5, 15};
 		}
@@ -68,7 +74,7 @@ global {
 			alliance <- 2;
 			location <- {95, 30};
 		}
-		create Provision number: 1 {
+		create Provisions number: 1 {
 			alliance <- 2;
 			location <- {95, 85};
 		}
@@ -122,7 +128,12 @@ species Commander skills:[moving, fipa] {
 	bool cycleZero <- false;
 	list<agent> availableMedics;
 	list<message> injuredMessageList;
+	list<message> provisionsMessageList;
 	rgb agentColor;
+	point provisionLocation;
+	point targetPoint;
+	point initialLocation;
+	bool initialLocationKnown;
 	
 	init {
 		alliance <- alliance;
@@ -143,6 +154,15 @@ species Commander skills:[moving, fipa] {
     
     reflex doWander {
 		do wander speed: 0.01;
+	}
+	
+	reflex moveToTarget {
+		do goto target:targetPoint speed: speed;
+	}
+	
+	reflex knowInitialLocation when: !initialLocationKnown {
+		initialLocation <- location;
+		initialLocationKnown <- true;
 	}
 	
 	reflex sendInitiateBattle when: !battleInitiated {
@@ -176,6 +196,27 @@ species Commander skills:[moving, fipa] {
 			remove injuredMessageList[0] from: injuredMessageList;
 		}
 	}
+	
+	reflex restoreprovision {
+		loop element over: informs {
+			if element.contents[1] = alliance and element.contents[0] = "Need provision!" {
+				add element to: provisionsMessageList;
+			}				
+		}
+		if !empty(provisionsMessageList) {
+			provisionLocation <- provisionsMessageList[0].contents[2];
+			targetPoint <- provisionLocation;
+		}
+		if provisionLocation != nil and distance_to(location, provisionLocation) < 0.5 {
+			ask Provisions {
+				self.medicineStock <- self.medicineStock + self.initialMedicineStock/2;
+				self.bulletStock <- self.bulletStock + self.initialBulletStock/2;
+				self.fuelStock <- self.fuelStock + self.initialFuelStock/2;
+				myself.targetPoint <- myself.initialLocation;
+				myself.provisionsMessageList <- [];
+			}
+		}
+	}
 }
 
 species Soldier skills:[moving, fipa] {
@@ -190,23 +231,32 @@ species Soldier skills:[moving, fipa] {
 	rgb agentColor;
 	list informsList;
 	point provisionsLocation;
-	bool provisionLocationKnown;
+	bool provisionsLocationKnown;
 	int fightSequence <- 0;
 	agent<Medic> medicAssigned;
 	bool medicLoopDone;
 	float transportSpeed;
 	bool injured;
 	float initialSpeed;
-	bool wentToProvisions;
+	bool wentToprovision;
+	//int wentToprovisionCounter;
 	agent<Transport> transportAssigned;
 	agent<Commander> commanderAssigned;
-	int wentToProvisionsCounter;
+	bool medicArrived;
+	int medicArrivedCounter;
 	point battleLocationAfterHealing;
+	int health <- rnd(10, 20);
+	int initialHealth;
+	int bullets <- rnd (2, 4);
+	int initialBulletCount;
+	int power <- rnd (5, 10);
+	bool goingToProvisions;
 	
 	init {
-		//name <- "Soldier";
 		initialSpeed <- rnd(0.01,0.09);
 		speed <- rnd(0.01,0.09);
+		initialBulletCount <- bullets;
+		initialHealth <- health;
 	}
 	
 	aspect base {
@@ -217,7 +267,7 @@ species Soldier skills:[moving, fipa] {
 		do wander speed: 0.01;
 	}
 	
-	reflex moveToTarget when: battleIsHappening and inField and !fighting {
+	reflex moveToTarget when: battleIsHappening and inField and !fighting and !goingToProvisions {
 		if (alliance = 1) and !injured {
 			targetPoint <- {100, location.y};
 		}
@@ -225,6 +275,13 @@ species Soldier skills:[moving, fipa] {
 			targetPoint <- {0, location.y};
 		}
 		do goto target:targetPoint speed: speed;
+	}
+	
+	reflex moveToInitialPosition when: goingToProvisions {
+		do goto target:targetPoint speed: 0.08;
+		if location = initialPosition {
+			goingToProvisions <- false;
+		}
 	}
 	
 	reflex stopMoving when: inField {
@@ -250,26 +307,26 @@ species Soldier skills:[moving, fipa] {
 			}
 		}
 		do start_conversation with: [ to :: list(commanderAssigned), protocol :: 'fipa-contract-net', 
-		performative :: 'inform', contents :: ["Injured!", alliance, self] ];
-		agentColor <- #yellow;
-		ask Commander {
-			if self.alliance = myself.alliance {
-			}
-		}
-		///////////////////////////////////////////////////////Fighting se hace false cuando esta injured
+			performative :: 'inform', contents :: ["Injured!", alliance, self] ];
+		///////////////////////////////////////////////////////Fighting se hace false cuando esta injured. Los temas de Health y demas los controlas tu
 		fighting <- false;
+		health <- health - rnd(0,10);
+		bullets <- bullets - 1;
+		//write name + ": I'm injured! My current health is: " + health + "/" + initialHealth color: agentColor;
+		//write "\t I have " + bullets + " bullet(s) left!" color: agentColor;
+		agentColor <- #yellow;
 	}
 	
-	reflex goToMedic when: injured {
-		if medicAssigned != nil {
-			ask Medic(medicAssigned){
-				if self = myself.medicAssigned and distance_to (self.location, myself.location) < 1 {
-					myself.targetPoint <- self.location;
-					myself.speed <- self.transportSpeed;
-				}
-			}
-		}
-	}
+//	reflex goToMedic when: injured {
+//		if medicAssigned != nil {
+//			ask Medic(medicAssigned){
+//				if self = myself.medicAssigned and distance_to (self.location, myself.location) < 1 {
+//					myself.targetPoint <- self.location;
+//					myself.speed <- self.transportSpeed;
+//				}
+//			}
+//		}
+//	}
 	
 	///////////////////////////////La variable fightSequence no es nada util. Solo es para que luego de 1000 veces de....algo entonces que uno quede injured
 	/////////////////////////////// Esta cambiala por tu tema del tiempo.
@@ -330,16 +387,16 @@ species Soldier skills:[moving, fipa] {
 	}
 	
 	///////////////////////EN adelante no uso ninguna de tus variables, solo el targetPoint
-	reflex knowProvisionLocation when: !provisionLocationKnown {
-		ask Provision {
+	reflex knowprovisionsLocation when: !provisionsLocationKnown {
+		ask Provisions {
 			if self.alliance = myself.alliance {
 				myself.provisionsLocation <- self.location;	
 			}
 		}
-		provisionLocationKnown <- true;
+		provisionsLocationKnown <- true;
 	}
 	
-	reflex transportArrived when: injured {
+	reflex medicArrived when: injured {
 		loop element over: informs {
 			if element.contents[1] = alliance and element.contents[0] = "Coming to pick you up!"{
 				transportAssigned <- element.contents[2];
@@ -347,59 +404,63 @@ species Soldier skills:[moving, fipa] {
 				medicLoopDone <- true;
 			}
 		}
-		if medicLoopDone {
+		if medicLoopDone and medicArrivedCounter < 1 {
 			ask Medic(medicAssigned) {
-				self.injuredLocation <- myself.location;
-				if distance_to (self.location, myself.location) < 1 {
-					self.targetPoint <- myself.provisionsLocation;
-					myself.targetPoint <- myself.provisionsLocation;
-					myself.transportSpeed <- self.transportSpeed;
+				if distance_to (self.location, myself.location) < 3.1 {
+					if myself.health <= myself.initialHealth - 5 {
+						myself.health <- myself.health + 5;
+					}
+					else {
+						myself.health <- myself.initialHealth;
+					}	
+					if myself.alliance = 1 {
+						myself.agentColor <- #green;
+					}
+					else {
+						myself.agentColor <- #red;	
+					}
+					myself.medicArrived <- true;
+					//write myself.name + ": I've been healed! My health is now " + myself.health + "/" + myself.initialHealth color: myself.agentColor;
+					myself.targetPoint <- myself.initialPosition;	
 				}
+			}
+		}
+		if medicArrived and medicArrivedCounter < 1 {
+			ask Medic(medicAssigned) {
+				self.targetPoint <- self.initialLocation;
+				self.medicine <- self.medicine - 1;	
+				do resetControlVariables;	
 			}
 			ask Transport(transportAssigned) {
-				if distance_to (self.location, myself.location) < 1 {
-					self.targetPoint <- myself.provisionsLocation;
+				ask Medic at_distance 1 {
+					myself.targetPoint <- self.initialLocation;
+					self.transportSpeed <- self.transportSpeed + 0.05;
 				}
-			}	
+				self.fuel <- self.fuel - 1;
+				//write self.name + ": My current fuel is: " + fuel;
+				do resetControlVariables;	
+			}
+			medicArrivedCounter <- medicArrivedCounter + 1;
 		}
+		
+		if medicArrived and location = initialPosition {
+			do resetControlVariables;
+		}		
 	}
 	
-	reflex goToInitialPosition {
-		ask Provision {
-			if distance_to (myself.location, self.location) < 1 and myself.alliance = self.alliance {
-				myself.wentToProvisions <- true;
-				if myself.alliance = 1 {
-					myself.agentColor <- #green;
-				}
-				else {
-					myself.agentColor <- #red;	
-				}
+	reflex goToProvisions when: bullets = 0 and !injured and !fighting {
+		goingToProvisions <- true;
+		ask Provisions {
+			if distance_to (myself.location, self.location) > 0.5 and myself.alliance = self.alliance {
+				myself.targetPoint <- myself.provisionsLocation;
+				}	
+			if distance_to (myself.location, self.location) < 0.5 and myself.alliance = self.alliance {
+				myself.bullets <- myself.initialBulletCount;
+				//write "\t My bullets have been replenished to: " + myself.bullets + "/" + myself.initialBulletCount color: myself.agentColor;
 			}
 		}
-		if wentToProvisions{
-//			if alliance = 1 {
-//    		battleLocationAfterHealing <- {20, initialPosition.y};
-//	    	}
-//	    	else {
-//	    		battleLocationAfterHealing <- {80, initialPosition.y};
-//	    	}
-//			targetPoint <- battleLocationAfterHealing;
+		if bullets = initialBulletCount {
 			targetPoint <- initialPosition;
-			if wentToProvisionsCounter < 1 {
-				ask Medic(medicAssigned) {
-					self.targetPoint <- self.initialLocation;
-					do resetControlVariables;
-				}
-				ask Transport(transportAssigned) {
-					self.targetPoint <- self.initialLocation;
-					do resetControlVariables;
-				}
-				wentToProvisionsCounter <- wentToProvisionsCounter + 1;
-			}
-					
-		}
-		if wentToProvisions and location = initialPosition {
-			do resetControlVariables;
 		}
 	}
 	
@@ -411,8 +472,8 @@ species Soldier skills:[moving, fipa] {
 		injured <- false;
 		fightSequence <- 0;
 		fighting <- false;
-		wentToProvisions <- false;
-		wentToProvisionsCounter <- 0;
+		medicArrived <- false;
+		medicArrivedCounter <- 0;
 	}
 }
 
@@ -435,10 +496,14 @@ species Medic skills:[moving, fipa] {
 	list<message> injuredMessageList;
 	list<message> transportMessageList;
 	rgb agentColor;
+	int medicine <- rnd (0,5);
+	int initialMedicine;
+	
 	
 	init {
 		alliance <- alliance;
 		initialSpeed <- 0.05;
+		initialMedicine <- medicine;
 	}
 	
 	aspect base {
@@ -456,12 +521,7 @@ species Medic skills:[moving, fipa] {
 	}
 	
 	reflex moveToTarget when: moveControl {
-		if transportLoopDone {
-			do goto target:targetPoint speed: transportSpeed;
-		}
-		else {
-			do goto target:targetPoint speed: initialSpeed;
-		}
+		do goto target:targetPoint speed: transportSpeed;
 	}
 	
 	reflex receiveInforms {
@@ -506,15 +566,14 @@ species Medic skills:[moving, fipa] {
 		}
 	}
 	
-//	reflex sendQueuedMessages when: !empty(injuredMessageList) and !occupied{
-//		availableTransports <- [];
-//		ask Transport {
-//			if !self.occupied and self.alliance = myself.alliance {
-//				add self to: myself.availableTransports;
-//			}
-//		}
-//		
-//	}
+	reflex inProvisions when: medicine != initialMedicine {
+		ask Provisions {
+			if distance_to (myself.location, self.location) < 0.5 and myself.alliance = self.alliance {
+				myself.medicine <- myself.initialMedicine;
+				//write myself.name + ": I've been restocked! My medicine is now " + myself.medicine+ "/" + myself.initialMedicine color: myself.agentColor;
+			}
+		}
+	}
 	
 	action resetControlVariables {
 		transportAssigned <- nil;
@@ -525,7 +584,7 @@ species Medic skills:[moving, fipa] {
 		injuredLocation <- nil;
 		injuredSoldier <- nil;
 		occupied <- false;
-		targetPoint <- initialLocation;
+		//targetPoint <- initialLocation;
 	}
 }
 
@@ -540,9 +599,13 @@ species Transport skills:[moving, fipa] {
 	float transportSpeed <- 0.2;
 	agent<Soldier> injuredSoldier;
 	rgb agentColor <- #black;
+	int fuel <- rnd(2, 5);
+	int initialFuel;
+	point provisionsLocation;
 	
 	init {
 		alliance <- alliance;
+		initialFuel <- fuel;
 	}
 	
 	aspect base {
@@ -552,6 +615,11 @@ species Transport skills:[moving, fipa] {
     reflex saveInitialLocation when: !initialLocationSaved {
     	initialLocation <- location;
     	initialLocationSaved <- true;
+    	ask Provisions {
+    		if myself.alliance = self.alliance {
+    			myself.provisionsLocation <- self.location;
+    		}
+    	}
     }
     
     reflex doWander {
@@ -574,24 +642,52 @@ species Transport skills:[moving, fipa] {
 		}
 	}
 	
+	reflex inProvisions when: fuel != initialFuel {
+		ask Provisions {
+			if distance_to (myself.location, self.location) < 0.5 and myself.alliance = self.alliance {
+				myself.fuel <- myself.initialFuel;
+				//write myself.name + ": I've been refueled! My fuel is now " + myself.fuel + "/" + myself.initialFuel color: myself.agentColor;
+			}
+		}
+	}
+	
+//	reflex outOfFuel {
+//		targetPoint <- provisionsLocation;	
+//	}
+	
 	action resetControlVariables {
 		//moveControl <- false;
 		occupied <- false;
-		targetPoint <- initialLocation;
+		//targetPoint <- initialLocation;
 	}
 	
 }
 
-species Provision {
+species Provisions skills: [fipa] {
 	
 	int alliance;
+	float medicineStock <- 10.0;
+	float initialMedicineStock;
+	float bulletStock <- 20.0;
+	float initialBulletStock;
+	float fuelStock <- 6.0;
+	float initialFuelStock;
+	agent<Commander> assignedCommander;
 	
 	init {
 		alliance <- alliance;
+		initialMedicineStock <- medicineStock;
+		initialBulletStock <- bulletStock;
+		initialFuelStock <- fuelStock;
 	}
 	
 	aspect base {
         draw sphere(1.5) color: #white;
+    }
+    
+    reflex restoreOwnProvisions when: medicineStock < 3 or bulletStock < 5 or fuelStock < 2 {
+		do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
+			performative :: 'inform', contents :: ["Need provisions!", alliance, location] ];
     }
 }
 
@@ -607,7 +703,7 @@ experiment BattleField type: gui {
 			species Soldier aspect: base;
 			species Medic aspect: base;
 			species Transport aspect: base;
-			species Provision aspect: base;
+			species Provisions aspect: base;
        	}
     }
 }

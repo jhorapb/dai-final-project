@@ -129,11 +129,14 @@ species Commander skills:[moving, fipa] {
 	list<agent> availableMedics;
 	list<message> injuredMessageList;
 	list<message> provisionsMessageList;
+	list<message> intruderMessageList;
 	rgb agentColor;
 	point provisionLocation;
 	point targetPoint;
 	point initialLocation;
 	bool initialLocationKnown;
+	bool protectingZone;
+	string intruderDetectedName;
 	
 	init {
 		alliance <- alliance;
@@ -170,7 +173,7 @@ species Commander skills:[moving, fipa] {
 			cycleZero <- true;
 			initialTime <- time;
 		}
-		if time - initialTime = 10{
+		if time - initialTime = 10 {
 			do start_conversation with: [ to :: list(Soldier), protocol :: 'fipa-contract-net', 
 				performative :: 'inform', contents :: ["Fight!", alliance] ];
 			initiateBattleSent <- true;
@@ -181,19 +184,35 @@ species Commander skills:[moving, fipa] {
 		loop element over: informs {
 			if element.contents[1] = alliance and element.contents[0] = "Injured!" {
 				add element to: injuredMessageList;
-			}				
-		}
-		availableMedics <- [];
-		ask Medic {
-			if !self.occupied and self.alliance = myself.alliance {
-				add self to: myself.availableMedics;
+			}
+			else if element.contents[0] = "intruderAlert" and element.contents[2] != alliance {
+				add element to: intruderMessageList;
 			}
 		}
-		if !empty(availableMedics) and !empty(injuredMessageList) {
-			agent<Medic> chosenMedic <- availableMedics[rnd(0, length(availableMedics) -1)];
-			do start_conversation with: [ to :: list(chosenMedic), protocol :: 'fipa-contract-net', 
-				performative :: 'inform', contents :: ["Injured found!", alliance, Soldier(injuredMessageList[0].sender).location, Soldier(injuredMessageList[0].sender) ] ];
-			remove injuredMessageList[0] from: injuredMessageList;
+		if !empty(injuredMessageList) {
+			availableMedics <- [];
+			ask Medic {
+				if !self.occupied and self.alliance = myself.alliance {
+					add self to: myself.availableMedics;
+				}
+			}
+			if !empty(availableMedics) {
+				agent<Medic> chosenMedic <- availableMedics[rnd(0, length(availableMedics) - 1)];
+				do start_conversation with: [ to :: list(chosenMedic), protocol :: 'fipa-contract-net', 
+					performative :: 'inform', contents :: ["Injured found!", alliance, Soldier(injuredMessageList[0].sender).location, Soldier(injuredMessageList[0].sender) ] ];
+				remove injuredMessageList[0] from: injuredMessageList;
+			}
+		}
+		if !empty(intruderMessageList) {
+			if (!protectingZone) {
+				targetPoint <- intruderMessageList[0].contents[3];
+				intruderDetectedName <- intruderMessageList[0].contents[1];
+				remove intruderMessageList[0] from: intruderMessageList;
+				protectingZone <- true;
+			}
+		}
+		else {
+			targetPoint <- initialLocation;
 		}
 	}
 	
@@ -217,6 +236,15 @@ species Commander skills:[moving, fipa] {
 			}
 		}
 	}
+	
+	reflex attackEnemy when: protectingZone {
+		ask Soldier at_distance 1 {
+			if (myself.intruderDetectedName = self.name) {
+				myself.protectingZone <- false;
+				do die;
+			}
+		}
+	}
 }
 
 species Soldier skills:[moving, fipa] {
@@ -232,7 +260,7 @@ species Soldier skills:[moving, fipa] {
 	rgb agentColor;
 	list informsList;
 	point provisionsLocation;
-	bool provisionLocationKnown;
+	bool provisionsLocationKnown;
 	bool leadingFight;
 	agent<Medic> medicAssigned;
 	bool medicLoopDone;
@@ -242,6 +270,7 @@ species Soldier skills:[moving, fipa] {
 	//int wentToprovisionCounter;
 	agent<Transport> transportAssigned;
 	agent<Commander> commanderAssigned;
+	agent<Commander> enemyCommander;
 	bool medicArrived;
 	int medicArrivedCounter;
 	point battleLocationAfterHealing;
@@ -273,11 +302,26 @@ species Soldier skills:[moving, fipa] {
 	
 	reflex moveToTarget when: battleIsHappening and inField and timeInFight = 0.0 {
 		if (!injured) {
+			ask Commander {
+				if (myself.alliance != self.alliance){
+					myself.enemyCommander <- self;
+				}
+			}
 			if (alliance = 1) {
 				targetPoint <- {100, location.y};
+				if (location.x >= 84) {
+					speed <- 0.01;
+					do start_conversation with: [ to :: list(enemyCommander), protocol :: 'fipa-contract-net', 
+					performative :: 'inform', contents :: ["intruderAlert", name, alliance, location] ];
+				}				
 			}
 			else {
 				targetPoint <- {0, location.y};
+				if (location.x <= 15) {
+					speed <- 0.01;
+					do start_conversation with: [ to :: list(enemyCommander), protocol :: 'fipa-contract-net', 
+					performative :: 'inform', contents :: ["intruderAlert", name, alliance, location] ];
+				}
 			}
 		}
 		do goto target:targetPoint speed: speed;
@@ -310,11 +354,21 @@ species Soldier skills:[moving, fipa] {
 				self.positionInFight <- location;
 				self.targetPoint <- location;
 				self.timeInFight <- currentTime;
-				write 'i am fucking MYSELF ' + myself;
-				write 'i am fucking SELF' + self;
 				do fight(self);
 			}
 		}
+	}
+	
+	reflex inform when: battleIsHappening and inField and timeInFight = 0.0 {
+		if (!injured) {
+			if (alliance = 1) {
+				targetPoint <- {100, location.y};
+			}
+			else {
+				targetPoint <- {0, location.y};
+			}
+		}
+		do goto target:targetPoint speed: speed;
 	}
 	
 	action notifyInjured {
@@ -339,7 +393,6 @@ species Soldier skills:[moving, fipa] {
 	////OK Done//////////////////// Cuando se ha ya cumplido el tiempo de pelea y que el man quede injured, pon injured en cierto y que haga el notify
 	reflex moveInFight when: fighting and timeInFight {
 		if (time - timeInFight = 500) {
-			write 'time over';
 			timeInFight <- 0.0;
 			positionInFight <- nil;
 			fightIsOver <- true;
@@ -348,7 +401,6 @@ species Soldier skills:[moving, fipa] {
 				fighting <- false;
 			}
 			else {
-				write 'is notifying';
 				do notifyInjured;
 			}
 		}
@@ -502,7 +554,6 @@ species Soldier skills:[moving, fipa] {
 		if (power >= fightOpponent.power) {
 			fightOpponent.health <- fightOpponent.health - power;
 			fightOpponent.injured <- true;
-			write 'lo pone injured papa';
 		}
 		else {
 			health <- health - fightOpponent.power;

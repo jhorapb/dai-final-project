@@ -23,12 +23,12 @@ global {
 		create Commander number: 1 {
 			alliance <- 1;
 		}
-		create Soldier number: 10 {
+		create Soldier number: indexSoldierAlliance1 {
 			alliance <- 1;
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: 1 {
+		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
 			alliance <- 1;
 			inField <- true;
 			agentColor <- #green;
@@ -50,12 +50,12 @@ global {
 		create Commander number: 1 {
 			alliance <- 2;
 		}
-		create Soldier number: 10 {
+		create Soldier number: indexSoldierAlliance2 {
 			alliance <- 2;
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: 1 {
+		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
 			alliance <- 2;
 			inField <- true;
 			agentColor <- #red;
@@ -132,6 +132,8 @@ species Commander skills:[moving, fipa] {
 	bool alreadyDrawn;
 	bool protectingZone;
 	string intruderDetectedName;
+	list<Medic> allianceMedicList;
+	list<Soldier> allianceReserveList;
 	
 	init {
 		alliance <- alliance;
@@ -149,6 +151,19 @@ species Commander skills:[moving, fipa] {
 			alreadyDrawn <- true;
 		}
         draw sphere(2.0) color: agentColor;
+    }
+    
+    reflex fillAgentLists {
+    	ask Medic {
+			if myself.alliance = self.alliance and length(myself.allianceMedicList) = 0 {
+				add self to: myself.allianceMedicList;
+			}
+		}
+		ask Soldier {
+			if myself.alliance = self.alliance and !self.inField and length(myself.allianceReserveList) = 0 {
+				add self to: myself.allianceReserveList;
+			}
+		}
     }
     
     reflex doWander {
@@ -187,8 +202,20 @@ species Commander skills:[moving, fipa] {
 			else if element.contents[0] = "intruderAlert" and element.contents[2] != alliance {
 				add element to: intruderMessageList;
 			}
+			if element.contents[0] = "Medic killed!" and element.contents[2] = alliance {
+				agent<Medic> deadMedic;
+				deadMedic <- element.contents[2];
+				remove deadMedic from: allianceMedicList;
+			}
+			if element.contents[0] = "I'm dead!" and element.contents[1] = alliance {
+				point deadSoldierInitialLocation;
+				deadSoldierInitialLocation <- element.contents[2];
+				do start_conversation with: [ to :: list(Soldier), protocol :: 'fipa-contract-net', 
+					performative :: 'inform', contents :: ["Dead reported!", alliance, deadSoldierInitialLocation] ];
+				write name + ": Reserve soldier needed at " + deadSoldierInitialLocation + "!" color: agentColor;
+			}
 		}
-		if !empty(injuredMessageList) {
+		if !empty(injuredMessageList) and !empty(allianceMedicList) {
 			availableMedics <- [];
 			ask Medic {
 			if !self.occupied and self.alliance = myself.alliance and self.medicine != 0  {
@@ -276,6 +303,8 @@ species Soldier skills:[moving, fipa] {
 	Soldier opponent;
 	bool readyToFight;
 	bool fightIsOver;
+	list<Medic> enemyMedicsKilled;
+	list<message> deadSoldierMessageList;
 	
 	init {
 		initialSpeed <- rnd(0.01,0.09);
@@ -379,9 +408,6 @@ species Soldier skills:[moving, fipa] {
 		agentColor <- #yellow;
 	}
 	
-	////OK Deleted///////////////// La variable fightSequence no es nada util. Solo es para que luego de 1000 veces de....algo entonces que uno quede injured
-	////OK Deleted///////////////// Esta cambiala por tu tema del tiempo. Testinjured tampoco hace gran cosa. Se deberia cambiar por la injured nada mas
-	////OK Done//////////////////// Cuando se ha ya cumplido el tiempo de pelea y que el man quede injured, pon injured en cierto y que haga el notify
 	reflex moveInFight when: fighting and timeInFight {
 		if (time - timeInFight = 500) {
 			timeInFight <- 0.0;
@@ -485,7 +511,7 @@ species Soldier skills:[moving, fipa] {
 			ask Medic(medicAssigned) {
 				self.targetPoint <- self.initialLocation;
 				self.medicine <- self.medicine - 1;	
-				write name + ": I've given first aid! My current medicine is: " + medicine;
+				write name + ": I've given first aid! My current medicine is: " + medicine color: self.agentColor;
 				do resetControlVariables;	
 			}
 			ask Transport(transportAssigned) {
@@ -528,6 +554,67 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
+	reflex killEnemyMedics {
+		if alliance = 1 and location.x < 50 {
+			ask Medic at_distance 1 {
+				if self.alliance != myself.alliance {
+					add self to: myself.enemyMedicsKilled;
+					write name + ": killed enemy " + myself.name + "!!" color: myself.agentColor;
+					do die;
+				}
+			}
+			if !empty(enemyMedicsKilled) {
+				do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
+					performative :: 'inform', contents :: ["Medic killed!", alliance, enemyMedicsKilled[0]] ];
+				remove enemyMedicsKilled[0] from: enemyMedicsKilled;
+			}
+			ask Transport at_distance 1 {
+				if self.alliance != myself.alliance {
+					self.targetPoint <- {95, 30};
+					self.agentColor <- #gray;
+				}
+			}
+		}
+		if alliance = 2 and location.x > 50 {
+			ask Medic at_distance 0.5 {
+				if self.alliance != myself.alliance {
+					do die;
+				}
+			}
+			ask Transport at_distance 0.5 {
+				if self.alliance != myself.alliance {
+					self.targetPoint <- {5, 70};
+					self.agentColor <- #gray;
+				}
+			}
+		}
+	}
+	
+	reflex replaceDeadSoldier when: !inField {
+		loop element over: informs {
+			if element.contents[0] = "Dead reported!" and element.contents[1] = alliance {
+				add element to: deadSoldierMessageList;
+			}
+		}
+		if !empty(deadSoldierMessageList) {
+			agent<Soldier> deadSoldier;
+			deadSoldier <- deadSoldierMessageList[0].sender;
+			targetPoint <- deadSoldierMessageList[0].contents[2];
+			remove deadSoldier from: deadSoldierMessageList;
+			if alliance = 1 {
+				agentColor <- #green;
+			}
+			else {
+				agentColor <- #red;
+			}
+		}
+		if targetPoint != nil and distance_to (location, targetPoint) = 0 {
+			inField <- true;
+			do resetControlVariables;
+		}
+	}
+	
+	
 	action resetControlVariables {
 		medicAssigned <- nil;
 		medicLoopDone <- false;
@@ -536,15 +623,6 @@ species Soldier skills:[moving, fipa] {
 		fighting <- false;
 		medicArrived <- false;
 		medicArrivedCounter <- 0;
-	}
-	
-	action notifyInjured {
-		do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
-		performative :: 'inform', contents :: ["Injured!", alliance] ];
-		write "My name is " + name + " and I sent the injured message to the Commander!" color: #orange;
-		agentColor <- #yellow;
-		///////////////////////////////////////////////////////Fighting se hace false cuando esta injured
-		fighting <- false;
 	}
 	
 	action fight (Soldier fightOpponent) {
@@ -556,6 +634,11 @@ species Soldier skills:[moving, fipa] {
 			health <- health - fightOpponent.power;
 			injured <- true; 
 		}
+	}
+	
+	action notifyDead {
+		do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
+			performative :: 'inform', contents :: ["I'm dead!", alliance, initialPosition] ];
 	}
 }
 

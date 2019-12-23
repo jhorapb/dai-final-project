@@ -17,7 +17,6 @@ global {
 	int indexReserveSoldierAlliance2 <- 15;
 	bool battleIsHappening;
 	bool initiateBattleSent;
-	bool testInjured;
 	
 	init {
 		// Alliance 1
@@ -29,7 +28,7 @@ global {
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
+		create Soldier number: 1 {
 			alliance <- 1;
 			inField <- true;
 			agentColor <- #green;
@@ -56,7 +55,7 @@ global {
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
+		create Soldier number: 1 {
 			alliance <- 2;
 			inField <- true;
 			agentColor <- #red;
@@ -178,20 +177,27 @@ species Soldier skills:[moving, fipa] {
 	bool inField;
 	bool initialPositionDefined;
 	point initialPosition;
+	bool injured;
 	point positionInFight;
 	point targetPoint;
 	rgb agentColor;
 	list informsList;
 	point provisionsLocation;
 	bool provisionLocationKnown;
-	int fightSequence <- 0;
+	bool leadingFight;
 	agent<Medic> medicAssigned;
 	bool medicLoopDone;
 	float transportSpeed;
-	bool injured;
 	float initialSpeed;
 	bool wentToProvisions;
 	agent<Transport> transportAssigned;
+	int health;
+	int power;
+	int bullets;
+	float timeInFight;
+	Soldier opponent;
+	bool readyToFight;
+	bool fightIsOver;
 	
 	
 	init {
@@ -208,39 +214,43 @@ species Soldier skills:[moving, fipa] {
 		do wander speed: 0.01;
 	}
 	
-	reflex moveToTarget when: battleIsHappening and inField and !fighting {
-		if (alliance = 1) and !injured {
-			targetPoint <- {100, location.y};
-		}
-		else if !injured {
-			targetPoint <- {0, location.y};
+	reflex moveToTarget when: battleIsHappening and inField and timeInFight = 0.0 {
+		if (!injured) {
+			if (alliance = 1) {
+				targetPoint <- {100, location.y};
+			}
+			else {
+				targetPoint <- {0, location.y};
+			}
 		}
 		do goto target:targetPoint speed: speed;
 	}
 	
-	reflex stopMoving when: inField {
+	reflex stopMoving when: inField and !fighting and !injured {
 		ask Soldier {
-			point localLocation <- myself.location;
-			point enemyLocation <- self.location;
-			/////////////////////////////////////////////////////////Agregue las dos ultimas condiciones al if xq sino el idiota injured encima de mi Transport se andaba hablando con los que no estaban injured
-			if (self.name != myself.name and localLocation distance_to enemyLocation <= 1 and !self.injured and !myself.injured) {
+			if (self.name != myself.name and myself.location distance_to self.location <= 1 and 
+				!myself.fighting and !myself.injured and !self.fighting and !self.injured
+			) {
+				float currentTime <- time;
+				myself.readyToFight <- true;
 				myself.fighting <- true;
+				myself.bullets <- myself.bullets - 1;
 				myself.positionInFight <- location;
 				myself.targetPoint <- location;
+				myself.timeInFight <- currentTime;
+				myself.opponent <- self;
+				myself.leadingFight <- true;
+				self.bullets <- self.bullets - 1;
+				self.readyToFight <- true;
 				self.fighting <- true;
 				self.positionInFight <- location;
 				self.targetPoint <- location;
+				self.timeInFight <- currentTime;
+				write 'i am fucking MYSELF ' + myself;
+				write 'i am fucking SELF' + self;
+				do fight(self);
 			}
 		}
-	}
-	
-	action notifyInjured {
-		do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
-		performative :: 'inform', contents :: ["Injured!", alliance] ];
-		//write "My name is " + name + " and I sent the injured message to the Commander!" color: #orange;
-		agentColor <- #yellow;
-		///////////////////////////////////////////////////////Fighting se hace false cuando esta injured
-		fighting <- false;
 	}
 	
 	reflex goToMedic when: injured {
@@ -254,31 +264,38 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
-	///////////////////////////////La variable fightSequence no es nada util. Solo es para que luego de 1000 veces de....algo entonces que uno quede injured
-	/////////////////////////////// Esta cambiala por tu tema del tiempo. Testinjured tampoco hace gran cosa. Se deberia cambiar por la injured nada mas
-	/////////////////////////////// Cuando se ha ya cumplido el tiempo de pelea y que el man quede injured, pon injured en cierto y que haga el notify
-	reflex moveInFight when: fighting and fightSequence <= 1000{
-		if (targetPoint = positionInFight and location distance_to targetPoint <= 1) {
-			if (alliance = 1) {
-				targetPoint <- {location.x - 2, location.y};
+	////OK Deleted///////////////// La variable fightSequence no es nada util. Solo es para que luego de 1000 veces de....algo entonces que uno quede injured
+	////OK Deleted///////////////// Esta cambiala por tu tema del tiempo. Testinjured tampoco hace gran cosa. Se deberia cambiar por la injured nada mas
+	////OK Done//////////////////// Cuando se ha ya cumplido el tiempo de pelea y que el man quede injured, pon injured en cierto y que haga el notify
+	reflex moveInFight when: fighting and timeInFight {
+		if (time - timeInFight = 500) {
+			write 'time over';
+			timeInFight <- 0.0;
+			positionInFight <- nil;
+			fightIsOver <- true;
+			
+			if (!injured) {
+				fighting <- false;
 			}
 			else {
-				targetPoint <- {location.x + 2, location.y};
+				write 'is notifying';
+				do notifyInjured;
 			}
 		}
-		else if (location = targetPoint) {
-			targetPoint <- positionInFight;
+		else {	
+			if (targetPoint = positionInFight and location distance_to targetPoint <= 1) {
+				if (alliance = 1) {
+					targetPoint <- {location.x - 2, location.y};
+				}
+				else {
+					targetPoint <- {location.x + 2, location.y};
+				}
+			}
+			else if (location = targetPoint) {
+				targetPoint <- positionInFight;
+			}
+			do goto target:targetPoint speed: rnd(0.05);
 		}
-		if fightSequence < 1000 {
-			fightSequence <- fightSequence + 1;	
-		}
-		else if !testInjured {
-			do notifyInjured;
-			fightSequence <- fightSequence + 1;
-			testInjured <- true;
-			injured <- true;
-		}
-		do goto target:targetPoint speed: rnd(0.05);
 	}
 	
 	reflex initializePosition when: !initialPositionDefined {
@@ -385,10 +402,29 @@ species Soldier skills:[moving, fipa] {
 		medicLoopDone <- false;
 		speed <- initialSpeed;
 		injured <- false;
-		testInjured <- false;
-		fightSequence <- 0;
 		fighting <- false;
 		wentToProvisions <- false;
+	}
+	
+	action notifyInjured {
+		do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
+		performative :: 'inform', contents :: ["Injured!", alliance] ];
+		write "My name is " + name + " and I sent the injured message to the Commander!" color: #orange;
+		agentColor <- #yellow;
+		///////////////////////////////////////////////////////Fighting se hace false cuando esta injured
+		fighting <- false;
+	}
+	
+	action fight (Soldier fightOpponent) {
+		if (power >= fightOpponent.power) {
+			fightOpponent.health <- fightOpponent.health - power;
+			fightOpponent.injured <- true;
+			write 'lo pone injured papa';
+		}
+		else {
+			health <- health - fightOpponent.power;
+			injured <- true; 
+		}
 	}
 }
 

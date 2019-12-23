@@ -28,7 +28,7 @@ global {
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: 1 {
+		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
 			alliance <- 1;
 			inField <- true;
 			agentColor <- #green;
@@ -55,7 +55,7 @@ global {
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: 1 {
+		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
 			alliance <- 2;
 			inField <- true;
 			agentColor <- #red;
@@ -181,7 +181,7 @@ species Commander skills:[moving, fipa] {
 			if element.contents[1] = alliance and element.contents[0] = "Injured!" {
 				add element to: injuredMessageList;
 			}	
-			if element.contents[1] = alliance and element.contents[0] = "Need provisions!" {
+			else if element.contents[1] = alliance and element.contents[0] = "Need provisions!" {
 				add element to: provisionsMessageList;
 			}
 			else if element.contents[0] = "intruderAlert" and element.contents[2] != alliance {
@@ -191,7 +191,7 @@ species Commander skills:[moving, fipa] {
 		if !empty(injuredMessageList) {
 			availableMedics <- [];
 			ask Medic {
-			if !self.occupied and self.alliance = myself.alliance and self.medicine != 0  {
+				if !self.occupied and self.alliance = myself.alliance and self.medicine != 0  {
 					add self to: myself.availableMedics;
 				}
 			}
@@ -204,10 +204,15 @@ species Commander skills:[moving, fipa] {
 		}
 		if !empty(intruderMessageList) {
 			if (!protectingZone) {
-				targetPoint <- intruderMessageList[0].contents[3];
 				intruderDetectedName <- intruderMessageList[0].contents[1];
-				remove intruderMessageList[0] from: intruderMessageList;
 				protectingZone <- true;
+			}
+			if intruderDetectedName != nil {
+				ask Soldier {
+					if (myself.intruderDetectedName = self.name) {
+						myself.targetPoint <- self.location;
+					}
+				}
 			}
 		}
 		else {
@@ -233,6 +238,8 @@ species Commander skills:[moving, fipa] {
 		ask Soldier at_distance 1 {
 			if (myself.intruderDetectedName = self.name) {
 				myself.protectingZone <- false;
+				myself.intruderDetectedName <- nil;
+				remove myself.intruderMessageList[0] from: myself.intruderMessageList;
 				do die;
 			}
 		}
@@ -275,7 +282,7 @@ species Soldier skills:[moving, fipa] {
 	int bulletsNeeded;
 	Soldier opponent;
 	bool readyToFight;
-	bool fightIsOver;
+	bool wasFighting;
 	
 	init {
 		initialSpeed <- rnd(0.01,0.09);
@@ -292,7 +299,7 @@ species Soldier skills:[moving, fipa] {
 		do wander speed: 0.01;
 	}
 	
-	reflex moveToTarget when: battleIsHappening and inField and timeInFight = 0.0 {
+	reflex moveToTarget when: battleIsHappening and inField and timeInFight = 0.0 and !wasFighting {
 		if (!injured) {
 			ask Commander {
 				if (myself.alliance != self.alliance){
@@ -319,48 +326,44 @@ species Soldier skills:[moving, fipa] {
 		do goto target:targetPoint speed: speed;
 	}
 	
-	reflex moveToInitialPosition when: goingToProvisions {
+	reflex moveToInitialPosition when: goingToProvisions or wasFighting {
 		do goto target:targetPoint speed: 0.08;
 		if location = initialPosition {
 			goingToProvisions <- false;
+			wasFighting <- false;
 		}
 	}
 	
 	reflex stopMoving when: inField {
 		ask Soldier {
-			if (self.name != myself.name and myself.location distance_to self.location <= 1 and 
-				!myself.fighting and !myself.injured and !self.fighting and !self.injured
-			) {
-				float currentTime <- time;
-				myself.readyToFight <- true;
-				myself.fighting <- true;
-				myself.bullets <- myself.bullets - 1;
-				myself.positionInFight <- location;
-				myself.targetPoint <- location;
-				myself.timeInFight <- currentTime;
-				myself.opponent <- self;
-				myself.leadingFight <- true;
-				self.bullets <- self.bullets - 1;
-				self.readyToFight <- true;
-				self.fighting <- true;
-				self.positionInFight <- location;
-				self.targetPoint <- location;
-				self.timeInFight <- currentTime;
-				do fight(self);
+			if (self.name != myself.name and myself.location distance_to self.location <= 1) {
+				if (!self.injured) {
+					if (!myself.fighting and !myself.injured and !self.fighting) {
+						float currentTime <- time;
+						myself.readyToFight <- true;
+						myself.fighting <- true;
+						myself.bullets <- myself.bullets - 1;
+						myself.positionInFight <- location;
+						myself.targetPoint <- location;
+						myself.timeInFight <- currentTime;
+						myself.opponent <- self;
+						myself.leadingFight <- true;
+						self.bullets <- self.bullets - 1;
+						self.readyToFight <- true;
+						self.fighting <- true;
+						self.positionInFight <- location;
+						self.targetPoint <- location;
+						self.timeInFight <- currentTime;
+						do fight(self);
+					}
+				}
+				else {
+					write '+++el otro';
+					// do notifyDead;
+					do die;
+				}
 			}
 		}
-	}
-	
-	reflex inform when: battleIsHappening and inField and timeInFight = 0.0 {
-		if (!injured) {
-			if (alliance = 1) {
-				targetPoint <- {100, location.y};
-			}
-			else {
-				targetPoint <- {0, location.y};
-			}
-		}
-		do goto target:targetPoint speed: speed;
 	}
 	
 	action notifyInjured {
@@ -382,16 +385,21 @@ species Soldier skills:[moving, fipa] {
 	////OK Deleted///////////////// La variable fightSequence no es nada util. Solo es para que luego de 1000 veces de....algo entonces que uno quede injured
 	////OK Deleted///////////////// Esta cambiala por tu tema del tiempo. Testinjured tampoco hace gran cosa. Se deberia cambiar por la injured nada mas
 	////OK Done//////////////////// Cuando se ha ya cumplido el tiempo de pelea y que el man quede injured, pon injured en cierto y que haga el notify
-	reflex moveInFight when: fighting and timeInFight {
+	reflex moveInFight when: fighting and timeInFight != 0.0 {
 		if (time - timeInFight = 500) {
 			timeInFight <- 0.0;
 			positionInFight <- nil;
-			fightIsOver <- true;
+			wasFighting <- true;
 			
 			if (!injured) {
 				fighting <- false;
+				targetPoint <- initialPosition;
 			}
 			else {
+				if (health <= 0) {
+					write '+++do die';
+					do die;
+				}
 				do notifyInjured;
 			}
 		}
@@ -548,13 +556,15 @@ species Soldier skills:[moving, fipa] {
 	}
 	
 	action fight (Soldier fightOpponent) {
+		
+		health <- health - fightOpponent.power;
+		fightOpponent.health <- fightOpponent.health - power;
+		
 		if (power >= fightOpponent.power) {
-			fightOpponent.health <- fightOpponent.health - power;
 			fightOpponent.injured <- true;
 		}
 		else {
-			health <- health - fightOpponent.power;
-			injured <- true; 
+			injured <- true;
 		}
 	}
 }
@@ -770,7 +780,7 @@ species Transport skills:[moving, fipa] {
 			occupied <- true;
 			do start_conversation with: [ to :: injuredReportedMessageList[0].sender, protocol :: 'fipa-contract-net', 
 				performative :: 'inform', contents :: ["Pick up!", alliance, location] ];
-			remove  injuredReportedMessageList[0] from: injuredReportedMessageList;
+			remove injuredReportedMessageList[0] from: injuredReportedMessageList;
 		}
 	}
 	

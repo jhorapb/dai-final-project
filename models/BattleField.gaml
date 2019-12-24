@@ -17,8 +17,52 @@ global {
 	int indexReserveSoldierAlliance2 <- 15;
 	bool battleIsHappening;
 	bool initiateBattleSent;
+	int armyHealthAlliance1;
+	int commanderHealthAlliance1;
+	int armyHealthAlliance2;
+	int commanderHealthAlliance2;
+	bool restartBattle;
+	float simulationTime <- -1.0;
 	
 	init {
+		do initializeBattle;
+	}
+	
+	reflex restartBattle when: restartBattle {
+		NUMBER_OF_SOLDIERS_IN_FIELD <- 9;
+		indexSoldierAlliance1 <- 10;
+		indexSoldierAlliance2 <- 10;
+		indexReserveSoldierAlliance1 <- 85;
+		indexReserveSoldierAlliance2 <- 15;
+		battleIsHappening <- false;
+		initiateBattleSent <- false;
+		armyHealthAlliance1 <- 0;
+		commanderHealthAlliance1 <- 0;
+		armyHealthAlliance2 <- 0;
+		commanderHealthAlliance2 <- 0;
+		restartBattle <- false;
+		simulationTime <- 0.0;
+		do initializeBattle;
+	}
+	
+	action initializeBattle {
+		
+		ask Commander {
+			do die;
+		}
+		ask Soldier {
+			do die;
+		}
+		ask Medic {
+			do die;
+		}
+		ask Transport {
+			do die;
+		}
+		ask Provisions {
+			do die;
+		}
+		
 		// Alliance 1
 		create Commander number: 1 {
 			alliance <- 1;
@@ -28,7 +72,7 @@ global {
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
+		create Soldier number: 1 {
 			alliance <- 1;
 			inField <- true;
 			agentColor <- #green;
@@ -107,11 +151,11 @@ global {
 				}
 			}
 		}
-		
 	}
+	
 }
 
-
+//Main species. Commands the entire army via FIPA messages, commands, and supplies
 species Commander skills:[moving, fipa] {
 	
 	int alliance;
@@ -141,26 +185,31 @@ species Commander skills:[moving, fipa] {
 	
 	aspect base {
 		if (alliance = 1 and !alreadyDrawn){
+			write 'mierda 1';
 			location <- {5, 50};
+			initialLocation <- location;
 			agentColor <- #blue;
 			alreadyDrawn <- true;
 		}
 		else if (alliance = 2 and !alreadyDrawn){
+			write 'mierda 2';
 			location <- {95, 50};
+			initialLocation <- location;
 			agentColor <- #blue;
 			alreadyDrawn <- true;
 		}
-        draw sphere(2.0) color: agentColor;
+        draw sphere(2.0) at: location color: agentColor;
     }
     
-    reflex fillAgentLists {
+    //Fill initial reference lists for the Commander's use
+    reflex fillAgentLists when: !initialLocationKnown {
     	ask Medic {
-			if myself.alliance = self.alliance and length(myself.allianceMedicList) = 0 {
+			if myself.alliance = self.alliance {
 				add self to: myself.allianceMedicList;
 			}
 		}
 		ask Soldier {
-			if myself.alliance = self.alliance and !self.inField and length(myself.allianceReserveList) = 0 {
+			if myself.alliance = self.alliance and !self.inField {
 				add self to: myself.allianceReserveList;
 			}
 		}
@@ -191,7 +240,8 @@ species Commander skills:[moving, fipa] {
 		}
 	}
 	
-	reflex receiveInjured {
+	//Main reflex to receive different kinds of inform messages from agents: injured, provisions, intruders, deaths, etc.
+	reflex receiveInforms {
 		loop element over: informs {
 			if element.contents[1] = alliance and element.contents[0] = "Injured!" {
 				add element to: injuredMessageList;
@@ -207,14 +257,24 @@ species Commander skills:[moving, fipa] {
 				deadMedic <- element.contents[2];
 				remove deadMedic from: allianceMedicList;
 			}
-			else if element.contents[0] = "I'm dead!" and element.contents[1] = alliance {
+			//If a soldier reports his death, send in a Reserve soldier to replace him
+			else if element.contents[0] = "I'm dead!" and element.contents[1] = alliance and length(allianceReserveList) > 0{
 				point deadSoldierInitialLocation;
+				agent<Soldier> chosenReserveSoldier;
+				agent<Soldier> deadSoldier;
+				message deadSoldierMessage;
+				deadSoldierMessage <- element;
+				chosenReserveSoldier <- allianceReserveList[rnd(0, (length(allianceReserveList) - 1))];
 				deadSoldierInitialLocation <- element.contents[2];
-				do start_conversation with: [ to :: list(Soldier), protocol :: 'fipa-contract-net', 
-					performative :: 'inform', contents :: ["Dead reported!", alliance, deadSoldierInitialLocation] ];
+				deadSoldier <- element.sender;
+				do start_conversation with: [ to :: list(chosenReserveSoldier), protocol :: 'fipa-contract-net', 
+					performative :: 'inform', contents :: ["Dead reported!", alliance, deadSoldierInitialLocation, deadSoldier] ];
 				write name + ": Reserve soldier needed at " + deadSoldierInitialLocation + "!" color: agentColor;
+				write name + ": Available reserve soldiers are " + allianceReserveList;
+				remove chosenReserveSoldier from: allianceReserveList;
 			}
 		}
+		//Checking for available medics to send messages to
 		if !empty(injuredMessageList) and !empty(allianceMedicList) {
 			availableMedics <- [];
 			ask Medic {
@@ -229,6 +289,7 @@ species Commander skills:[moving, fipa] {
 				remove injuredMessageList[0] from: injuredMessageList;
 			}
 		}
+		//Take action if an intruder enters the home base
 		if !empty(intruderMessageList) {
 			if (!protectingZone) {
 				intruderDetectedName <- intruderMessageList[0].contents[1];
@@ -249,6 +310,7 @@ species Commander skills:[moving, fipa] {
 		}
 	}
 	
+	//If Provisions agent needs bullets, medicine, fuel, etc., it will call its Commander. This reflex receives these messages. 
 	reflex restoreProvisions when: !empty(provisionsMessageList) {
 		provisionLocation <- provisionsMessageList[0].contents[2];
 		targetPoint <- provisionLocation;
@@ -263,18 +325,49 @@ species Commander skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex to attack an enemy if it enters the home base
 	reflex attackEnemy when: protectingZone {
 		ask Soldier at_distance 1 {
 			if (myself.intruderDetectedName = self.name) {
-				write '---> Commander attacks ' + self.name color: #orange;
+				write '---> ' + myself.name + ' attacks ' + self.name color: #orange;
 				myself.protectingZone <- false;
 				myself.intruderDetectedName <- nil;
+				myself.health <- myself.health - self.power;
+				do notifyDead;
 				do die;
+			}
+		}
+		if health <= 0 {
+			write 'RIP ' + name color: #magenta;
+			write 'Alliance # ' + alliance + ' has just lost the battle.';
+			write 'Restarting...';
+			// Restart battle
+			restartBattle <- true;
+		}
+	}
+	
+	//Reflex to update both commander and army healths to display in pie charts. Provide an overview of the flow of battle in real time
+	reflex updateArmyHealth {
+		if alliance = 1 {
+			commanderHealthAlliance1 <- health;
+		}
+		if alliance = 2 {
+			commanderHealthAlliance2 <- health;	
+		}
+		armyHealthAlliance1 <- 0;
+		armyHealthAlliance2 <- 0;
+		ask Soldier {
+			if self.alliance = 1 {
+				armyHealthAlliance1 <- armyHealthAlliance1 + self.health;
+			}
+			else if self.alliance = 2 {
+				armyHealthAlliance2 <- armyHealthAlliance2 + self.health;
 			}
 		}
 	}
 }
 
+//Main field soldiers. Two types: active and reserves. Their goal is to eliminate enemy soldiers. Reserves replace actives when they die.
 species Soldier skills:[moving, fipa] {
 	
 	int alliance;
@@ -315,6 +408,7 @@ species Soldier skills:[moving, fipa] {
 	list<Medic> enemyMedicsKilled;
 	list<message> deadSoldierMessageList;
 	bool wasFighting;
+	agent<Soldier> deadSoldier;
 	
 	init {
 		initialSpeed <- rnd(0.01,0.09);
@@ -331,6 +425,12 @@ species Soldier skills:[moving, fipa] {
 		do wander speed: 0.01;
 	}
 	
+	//Reflex to move reserve soldiers when an active one dies
+	reflex moveToTargetReserve when: !inField {
+		do goto target:targetPoint speed: 0.2;
+	}
+	
+	//Reflex to move active soldiers
 	reflex moveToTarget when: battleIsHappening and inField and timeInFight = 0.0 and !wasFighting {
 		if (!injured) {
 			ask Commander {
@@ -344,7 +444,13 @@ species Soldier skills:[moving, fipa] {
 					speed <- 0.01;
 					do start_conversation with: [ to :: list(enemyCommander), protocol :: 'fipa-contract-net', 
 					performative :: 'inform', contents :: ["intruderAlert", name, alliance, location] ];
-				}				
+				}
+				if (location.x = 0) {
+					// Restart battle
+					write 'Alliance # ' + alliance + ' has just BEATEN Alliance # 2!' color: agentColor;
+					write 'Restarting...'; 
+					restartBattle <- true;
+				}
 			}
 			else {
 				targetPoint <- {0, location.y};
@@ -353,11 +459,18 @@ species Soldier skills:[moving, fipa] {
 					do start_conversation with: [ to :: list(enemyCommander), protocol :: 'fipa-contract-net', 
 					performative :: 'inform', contents :: ["intruderAlert", name, alliance, location] ];
 				}
+				if (location.x = 100) {
+					// Restart battle
+					write 'Alliance # ' + alliance + ' has just BEATEN Alliance # 1!' color: agentColor;
+					write 'Restarting...'; 
+					restartBattle <- true;
+				}
 			}
 		}
 		do goto target:targetPoint speed: speed;
 	}
 	
+	//Reflex to go back to initial positions after having resupplied
 	reflex moveToInitialPosition when: goingToProvisions or wasFighting {
 		do goto target:targetPoint speed: 0.08;
 		if location = initialPosition {
@@ -366,6 +479,7 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex used when fighting
 	reflex stopMoving when: inField {
 		ask Soldier {
 			if (self.name != myself.name and myself.location distance_to self.location <= 1) {
@@ -390,14 +504,14 @@ species Soldier skills:[moving, fipa] {
 					}
 				}
 				else {
-					write '+++el otro';
-					// do notifyDead;
+					do notifyDead;
 					do die;
 				}
 			}
 		}
 	}
 	
+	//Action used to notify others that I have been injured
 	action notifyInjured {
 		ask Commander {
 			if self.alliance = myself.alliance {
@@ -407,13 +521,15 @@ species Soldier skills:[moving, fipa] {
 		do start_conversation with: [ to :: list(commanderAssigned), protocol :: 'fipa-contract-net', 
 			performative :: 'inform', contents :: ["Injured!", alliance, self] ];
 		fighting <- false;
-		health <- health - rnd(0,10);
 		bullets <- bullets - 1;
-		write name + ": I'm injured! My current health is: " + health + "/" + initialHealth color: agentColor;
-		write "\t I have " + bullets + " bullet(s) left!" color: agentColor;
+		if health > 0 {
+			write name + ": I'm injured! My current health is: " + health + "/" + initialHealth color: agentColor;
+			write "\t I have " + bullets + " bullet(s) left!" color: agentColor;	
+		}
 		agentColor <- #yellow;
 	}
 	
+	//Reflex for main movements while fighting enemies
 	reflex moveInFight when: fighting and timeInFight != 0.0 {
 		if (time - timeInFight = 500) {
 			timeInFight <- 0.0;
@@ -426,7 +542,7 @@ species Soldier skills:[moving, fipa] {
 			}
 			else {
 				if (health <= 0) {
-					write '+++do die';
+					do notifyDead;
 					do die;
 				}
 				do notifyInjured;
@@ -448,6 +564,7 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex to place soldiers in initial position after being created
 	reflex initializePosition when: !initialPositionDefined {
 		if (alliance = 1) {
 			if (inField) {
@@ -471,7 +588,8 @@ species Soldier skills:[moving, fipa] {
 		initialPosition <- location;
 	}
 	
-	reflex receiveInitiateBattle when: initiateBattleSent and !injured {
+	//Reflex to receive initiateBattle command from Commander
+	reflex receiveInitiateBattle when: initiateBattleSent and !injured and inField {
 		loop element over: informs {
 			if element.contents[1] = alliance and element.contents[0] = "Fight!" {
 				battleIsHappening <- true;
@@ -480,6 +598,7 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
+	//One time reflex to save Provisions location
 	reflex knowprovisionsLocation when: !provisionsLocationKnown {
 		ask Provisions {
 			if self.alliance = myself.alliance {
@@ -489,6 +608,7 @@ species Soldier skills:[moving, fipa] {
 		provisionsLocationKnown <- true;
 	}
 	
+	//Reflex activated when injured. Soldier will be healed and all corresponding attributes (bullets, health, etc.) will be updated accordingly
 	reflex medicArrived when: injured {
 		loop element over: informs {
 			if element.contents[1] = alliance and element.contents[0] = "Coming to pick you up!"{
@@ -544,6 +664,7 @@ species Soldier skills:[moving, fipa] {
 		}		
 	}
 	
+	//Soldierwill go to Provisions to obtain more bullets to continue fighting
 	reflex goToProvisions when: bullets = 0 and !injured and !fighting {
 		goingToProvisions <- true;
 		ask Provisions {
@@ -565,6 +686,7 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
+	//Soldiers will kill enemy medics and steal their transports if found in their own territory
 	reflex killEnemyMedics {
 		if alliance = 1 and location.x < 50 {
 			ask Medic at_distance 1 {
@@ -601,15 +723,15 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
+	//Reserve soldiers will replace active soldiers when they die. 
 	reflex replaceDeadSoldier when: !inField {
 		loop element over: informs {
 			if element.contents[0] = "Dead reported!" and element.contents[1] = alliance {
 				add element to: deadSoldierMessageList;
 			}
 		}
-		if !empty(deadSoldierMessageList) {
-			agent<Soldier> deadSoldier;
-			deadSoldier <- deadSoldierMessageList[0].sender;
+		if !empty(deadSoldierMessageList) and targetPoint = nil {
+			deadSoldier <- deadSoldierMessageList[0].contents[3];
 			targetPoint <- deadSoldierMessageList[0].contents[2];
 			remove deadSoldier from: deadSoldierMessageList;
 			if alliance = 1 {
@@ -620,12 +742,17 @@ species Soldier skills:[moving, fipa] {
 			}
 		}
 		if targetPoint != nil and distance_to (location, targetPoint) = 0 {
+			write name + ": my targetPoint is " + targetPoint;
 			inField <- true;
+			battleIsHappening <- true;
+			write name + " has arrived to replace " + deadSoldier color: agentColor;
+			initialPosition <- location;
+			//deadSoldier <- nil;
 			do resetControlVariables;
 		}
 	}
 	
-	
+	//Action to reset control variables and continue the fight
 	action resetControlVariables {
 		medicAssigned <- nil;
 		medicLoopDone <- false;
@@ -636,6 +763,7 @@ species Soldier skills:[moving, fipa] {
 		medicArrivedCounter <- 0;
 	}
 	
+	//Action used when fighting enemies inField
 	action fight (Soldier fightOpponent) {
 		
 		health <- health - fightOpponent.power;
@@ -649,12 +777,15 @@ species Soldier skills:[moving, fipa] {
 		}
 	}
 	
+	//Action executed by soldiers right before they die. This notifies their commander of their impending doom
 	action notifyDead {
 		do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
 			performative :: 'inform', contents :: ["I'm dead!", alliance, initialPosition] ];
+		write name + " HAS DIED!" color: agentColor;
 	}
 }
 
+//Species in charge of assuring that all available soldiers are kept healthy. Casualties must be reduced to a minimum.
 species Medic skills:[moving, fipa] {
 	int alliance;
 	point injuredLocation;
@@ -676,6 +807,7 @@ species Medic skills:[moving, fipa] {
 	int initialMedicine;
 	int medicineNeeded;
 	point provisionsLocation;
+	bool soldierDead;
 	
 	
 	init {
@@ -693,6 +825,7 @@ species Medic skills:[moving, fipa] {
 		do wander speed: 0.01;
 	}
 	
+	//Initial reflex to save initialLocation after being created
 	reflex knowInitialLocation when: !initialLocationKnown {
 		initialLocation <- location;
 		ask Provisions {
@@ -703,10 +836,12 @@ species Medic skills:[moving, fipa] {
 		initialLocationKnown <- true;
 	}
 	
+	//Main movement reflex
 	reflex moveToTarget when: moveControl {
 		do goto target:targetPoint speed: transportSpeed;
 	}
 	
+	//Reflex to receive different kinds of commands via FIPA. These may be from Commanders, Transports, or others
 	reflex receiveInforms {
 		loop element over: informs {
 			if element.contents[1] = alliance and element.contents[0] = "Injured found!" and !occupied {
@@ -726,6 +861,8 @@ species Medic skills:[moving, fipa] {
 				add self to: myself.availableTransports;
 			}
 		}
+		
+		//Medic will call any available transport to come aid him in his quest to heal his comrades
 		if (!empty(availableTransports) or transportAssigned != nil) and !empty(injuredMessageList) and !occupied and medicine != 0 {
 			injuredLocation <- injuredMessageList[0].contents[2];
 			injuredSoldier <- injuredMessageList[0].contents[3];
@@ -756,6 +893,7 @@ species Medic skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex to run when restocking in Provisions
 	reflex inProvisions when: medicine != initialMedicine {
 		ask Provisions {
 			if distance_to (myself.location, self.location) < 0.5 and myself.alliance = self.alliance {
@@ -768,6 +906,7 @@ species Medic skills:[moving, fipa] {
 		}
 	}
 	
+	//If Medic runs out of medicine, it must go to Provisions and restock
 	reflex needMedicine when: medicine = 0 and !occupied {
 		targetPoint <- provisionsLocation;
 		moveControl <- true;
@@ -778,6 +917,7 @@ species Medic skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex to ensure that Medic and its assigned Transport are never too far apart
 	reflex followTransport when: medicine != 0{
 		if injuredLocation != nil and transportAssigned != nil {
 			ask Transport (transportAssigned) {
@@ -797,6 +937,25 @@ species Medic skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex to check if assigned injuredSoldier dies before the Medic arrives to help
+	reflex checkForDeadSoldier {
+		ask Soldier {
+			if self.alliance = myself.alliance and self.medicAssigned = myself and dead(self) {
+				myself.soldierDead <- true;
+			}
+		}
+		if soldierDead {
+			targetPoint <- initialLocation;
+			do resetControlVariables;
+			soldierDead <- false;
+			ask Transport(transportAssigned) {
+				self.targetPoint <- myself.targetPoint;
+				do resetControlVariables;
+			}
+		}
+	}
+	
+	//Action to reset control variables and continue the fight
 	action resetControlVariables {
 		//transportAssigned <- nil;
 		transportLoopDone <- false;
@@ -810,6 +969,7 @@ species Medic skills:[moving, fipa] {
 	}
 }
 
+//Main helper for Medics. They will help the Medic get quickly to injured soldiers. They may be interchanged between Medics if necessary
 species Transport skills:[moving, fipa] {
 	
 	int alliance;
@@ -818,7 +978,7 @@ species Transport skills:[moving, fipa] {
 	point initialLocation;
 	bool initialLocationSaved;
 	bool occupied;
-	float transportSpeed <- 0.2;
+	float transportSpeed <- 0.4;
 	agent<Soldier> injuredSoldier;
 	rgb agentColor <- #black;
 	int fuel <- rnd(2, 5);
@@ -836,6 +996,7 @@ species Transport skills:[moving, fipa] {
         draw cube(2.5) color: agentColor;
     }
     
+    //One time reflex to save initial location after initializing
     reflex saveInitialLocation when: !initialLocationSaved {
     	initialLocation <- location;
     	initialLocationSaved <- true;
@@ -854,6 +1015,7 @@ species Transport skills:[moving, fipa] {
 		do goto target:targetPoint speed: transportSpeed;
 	}
 	
+	//Reflex used to receive FIPA commands from Medics
 	reflex injuredReported {
 		loop element over: informs {
 			if element.contents[1] = alliance and element.contents[0] = "Pick me up!" {
@@ -870,6 +1032,7 @@ species Transport skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex used when restocking in Provisions
 	reflex inProvisions when: fuel != initialFuel {
 		ask Provisions {
 			if distance_to (myself.location, self.location) < 0.5 and myself.alliance = self.alliance {
@@ -883,6 +1046,7 @@ species Transport skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex used to go to Provisions if fuel is needed
 	reflex needFuel when: fuel = 0 {
 		targetPoint <- provisionsLocation;
 		moveControl <- true;
@@ -893,6 +1057,7 @@ species Transport skills:[moving, fipa] {
 		}
 	}
 	
+	//Reflex used to endure Transport and nearby Medic are always close by
 	reflex followMedic when: fuel !=0 {
 		ask Medic at_distance 0.7 {
 			if self.alliance = myself.alliance {
@@ -902,6 +1067,7 @@ species Transport skills:[moving, fipa] {
 		}
 	}
 	
+	//Action to reset control variables and continue fighting
 	action resetControlVariables {
 		//moveControl <- false;
 		//occupied <- false;
@@ -915,6 +1081,8 @@ species Transport skills:[moving, fipa] {
 	
 }
 
+//Main supply agent. In charge of providing comrades with medicine, bullets, fuel, and others. 
+//Most actions are done through reflexes in the other agents
 species Provisions skills: [fipa] {
 	
 	int alliance;
@@ -937,19 +1105,22 @@ species Provisions skills: [fipa] {
         draw sphere(1.5) color: #white;
     }
     
+    //If it runs out of Provisions, it must call the Commander with FIPA to come and restock
     reflex restoreOwnProvisions when: medicineStock < 3 or bulletStock < 5 or fuelStock < 2 {
 		do start_conversation with: [ to :: list(Commander), protocol :: 'fipa-contract-net', 
 			performative :: 'inform', contents :: ["Need provisions!", alliance, location] ];
     }
 }
 
+//Battlegrid used to color the map and define the different zones where soldiers interact
 grid BattleGrid width: 100 height: 100 neighbors: 8 {
 	
 }
 
 experiment BattleField type: gui {
+	
     output {
-    	display main_display type: opengl {
+    	display Battlefield type: opengl {
     		grid BattleGrid;
 			species Commander aspect: base;
 			species Soldier aspect: base;
@@ -957,6 +1128,21 @@ experiment BattleField type: gui {
 			species Transport aspect: base;
 			species Provisions aspect: base;
        	}
+       	//Chart used to display overall Army Health. Provides an estimate of who is winning the battle
+       	display ArmyHealth type: opengl {
+       		chart "Army Health" type: pie {
+				data "Alliance #1" value: armyHealthAlliance1 color: #green;
+				data "Alliance #2" value: armyHealthAlliance2 color: #red;
+			}
+       	}
+   		//Chart used to display opposing Commanders' Health. Provides an estimate of who is winning the battle
+   		display CommanderHealth type: opengl {
+			chart "Commander Health" type: pie {
+				data "Alliance #1" value: commanderHealthAlliance1 color: #green;
+				data "Alliance #2" value: commanderHealthAlliance2 color: #red;
+			}
+   		}
     }
+    
 }
 

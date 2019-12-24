@@ -1132,19 +1132,19 @@ experiment BattleField type: gui {
 			species Provisions aspect: base;
        	}
        	//Chart used to display overall Army Health. Provides an estimate of who is winning the battle
-//       	display ArmyHealth type: opengl {
-//       		chart "Army Health" type: pie {
-//				data "Alliance #1" value: armyHealthAlliance1 color: #green;
-//				data "Alliance #2" value: armyHealthAlliance2 color: #red;
-//			}
-//       	}
+       	display ArmyHealth type: opengl {
+       		chart "Army Health" type: pie {
+				data "Alliance #1" value: armyHealthAlliance1 color: #green;
+				data "Alliance #2" value: armyHealthAlliance2 color: #red;
+			}
+       	}
    		//Chart used to display opposing Commanders' Health. Provides an estimate of who is winning the battle
-//   		display CommanderHealth type: opengl {
-//			chart "Commander Health" type: pie {
-//				data "Alliance #1" value: commanderHealthAlliance1 color: #green;
-//				data "Alliance #2" value: commanderHealthAlliance2 color: #red;
-//			}
-//   		}
+   		display CommanderHealth type: opengl {
+			chart "Commander Health" type: pie {
+				data "Alliance #1" value: commanderHealthAlliance1 color: #green;
+				data "Alliance #2" value: commanderHealthAlliance2 color: #red;
+			}
+   		}
     }
     
 }

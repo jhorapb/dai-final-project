@@ -202,12 +202,12 @@ species Commander skills:[moving, fipa] {
 			else if element.contents[0] = "intruderAlert" and element.contents[2] != alliance {
 				add element to: intruderMessageList;
 			}
-			if element.contents[0] = "Medic killed!" and element.contents[2] = alliance {
+			else if element.contents[0] = "Medic killed!" and element.contents[2] = alliance {
 				agent<Medic> deadMedic;
 				deadMedic <- element.contents[2];
 				remove deadMedic from: allianceMedicList;
 			}
-			if element.contents[0] = "I'm dead!" and element.contents[1] = alliance {
+			else if element.contents[0] = "I'm dead!" and element.contents[1] = alliance {
 				point deadSoldierInitialLocation;
 				deadSoldierInitialLocation <- element.contents[2];
 				do start_conversation with: [ to :: list(Soldier), protocol :: 'fipa-contract-net', 
@@ -233,6 +233,7 @@ species Commander skills:[moving, fipa] {
 			if (!protectingZone) {
 				intruderDetectedName <- intruderMessageList[0].contents[1];
 				protectingZone <- true;
+				write '||| ' + intruderDetectedName + ' is entering forbidden area |||' color: #peru;
 			}
 			if intruderDetectedName != nil {
 				ask Soldier {
@@ -241,6 +242,7 @@ species Commander skills:[moving, fipa] {
 					}
 				}
 			}
+			remove intruderMessageList[0] from: intruderMessageList;
 		}
 		else {
 			targetPoint <- initialLocation;
@@ -264,9 +266,9 @@ species Commander skills:[moving, fipa] {
 	reflex attackEnemy when: protectingZone {
 		ask Soldier at_distance 1 {
 			if (myself.intruderDetectedName = self.name) {
+				write '---> Commander attacks ' + self.name color: #orange;
 				myself.protectingZone <- false;
 				myself.intruderDetectedName <- nil;
-				remove myself.intruderMessageList[0] from: myself.intruderMessageList;
 				do die;
 			}
 		}

@@ -71,7 +71,7 @@ global {
 			inField <- false;
 			agentColor <- #purple;
 		}
-		create Soldier number: 1 {
+		create Soldier number: NUMBER_OF_SOLDIERS_IN_FIELD {
 			alliance <- 1;
 			inField <- true;
 			agentColor <- #green;

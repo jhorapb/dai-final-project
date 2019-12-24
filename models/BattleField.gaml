@@ -46,7 +46,6 @@ global {
 	}
 	
 	action initializeBattle {
-		
 		ask Commander {
 			do die;
 		}
@@ -159,7 +158,6 @@ global {
 species Commander skills:[moving, fipa] {
 	
 	int alliance;
-	int power <- rnd(8,10);
 	int health <- rnd(30,40);
 	bool battleInitiated;
 	float initialTime;
@@ -178,6 +176,7 @@ species Commander skills:[moving, fipa] {
 	string intruderDetectedName;
 	list<Medic> allianceMedicList;
 	list<Soldier> allianceReserveList;
+	list<string> defeatedEnemies;
 	
 	init {
 		alliance <- alliance;
@@ -185,14 +184,12 @@ species Commander skills:[moving, fipa] {
 	
 	aspect base {
 		if (alliance = 1 and !alreadyDrawn){
-			write 'mierda 1';
 			location <- {5, 50};
 			initialLocation <- location;
 			agentColor <- #blue;
 			alreadyDrawn <- true;
 		}
 		else if (alliance = 2 and !alreadyDrawn){
-			write 'mierda 2';
 			location <- {95, 50};
 			initialLocation <- location;
 			agentColor <- #blue;
@@ -290,16 +287,16 @@ species Commander skills:[moving, fipa] {
 			}
 		}
 		//Take action if an intruder enters the home base
-		if !empty(intruderMessageList) {
+		else if !empty(intruderMessageList) {
 			if (!protectingZone) {
 				intruderDetectedName <- intruderMessageList[0].contents[1];
-				protectingZone <- true;
 				write '||| ' + intruderDetectedName + ' is entering forbidden area |||' color: #peru;
 			}
 			if intruderDetectedName != nil {
 				ask Soldier {
 					if (myself.intruderDetectedName = self.name) {
 						myself.targetPoint <- self.location;
+						myself.protectingZone <- true;
 					}
 				}
 			}
@@ -327,9 +324,12 @@ species Commander skills:[moving, fipa] {
 	
 	//Reflex to attack an enemy if it enters the home base
 	reflex attackEnemy when: protectingZone {
-		ask Soldier at_distance 1 {
-			if (myself.intruderDetectedName = self.name) {
+		ask Soldier {
+			if (myself.intruderDetectedName = self.name and 
+				myself.location distance_to self.location <= 1
+			) {
 				write '---> ' + myself.name + ' attacks ' + self.name color: #orange;
+				add self.name to: myself.defeatedEnemies;
 				myself.protectingZone <- false;
 				myself.intruderDetectedName <- nil;
 				myself.health <- myself.health - self.power;
@@ -382,7 +382,6 @@ species Soldier skills:[moving, fipa] {
 	list informsList;
 	point provisionsLocation;
 	bool provisionsLocationKnown;
-	bool leadingFight;
 	agent<Medic> medicAssigned;
 	bool medicLoopDone;
 	float transportSpeed;
@@ -390,7 +389,7 @@ species Soldier skills:[moving, fipa] {
 	bool wentToprovision;
 	agent<Transport> transportAssigned;
 	agent<Commander> commanderAssigned;
-	agent<Commander> enemyCommander;
+	Commander enemyCommander;
 	bool medicArrived;
 	int medicArrivedCounter;
 	point battleLocationAfterHealing;
@@ -403,12 +402,12 @@ species Soldier skills:[moving, fipa] {
 	bool goingToProvisions;
 	int bulletsNeeded;
 	Soldier opponent;
-	bool readyToFight;
 	bool fightIsOver;
 	list<Medic> enemyMedicsKilled;
 	list<message> deadSoldierMessageList;
 	bool wasFighting;
 	agent<Soldier> deadSoldier;
+	bool forbiddenZoneNotified;
 	
 	init {
 		initialSpeed <- rnd(0.01,0.09);
@@ -433,17 +432,14 @@ species Soldier skills:[moving, fipa] {
 	//Reflex to move active soldiers
 	reflex moveToTarget when: battleIsHappening and inField and timeInFight = 0.0 and !wasFighting {
 		if (!injured) {
-			ask Commander {
-				if (myself.alliance != self.alliance){
-					myself.enemyCommander <- self;
-				}
-			}
+			bool informEnemyCommander;
 			if (alliance = 1) {
 				targetPoint <- {100, location.y};
 				if (location.x >= 84) {
 					speed <- 0.01;
-					do start_conversation with: [ to :: list(enemyCommander), protocol :: 'fipa-contract-net', 
-					performative :: 'inform', contents :: ["intruderAlert", name, alliance, location] ];
+//					if (!forbiddenZoneNotified) {
+					informEnemyCommander <- true;
+//					}
 				}
 				if (location.x = 0) {
 					// Restart battle
@@ -456,8 +452,9 @@ species Soldier skills:[moving, fipa] {
 				targetPoint <- {0, location.y};
 				if (location.x <= 15) {
 					speed <- 0.01;
-					do start_conversation with: [ to :: list(enemyCommander), protocol :: 'fipa-contract-net', 
-					performative :: 'inform', contents :: ["intruderAlert", name, alliance, location] ];
+					//if (!forbiddenZoneNotified) {
+					informEnemyCommander <- true;
+					//}
 				}
 				if (location.x = 100) {
 					// Restart battle
@@ -465,6 +462,17 @@ species Soldier skills:[moving, fipa] {
 					write 'Restarting...'; 
 					restartBattle <- true;
 				}
+			}
+			if (informEnemyCommander) {
+				ask Commander {
+					if (myself.alliance != self.alliance){
+						myself.enemyCommander <- self;
+						self.defeatedEnemies <- [];
+					}
+				}
+				do start_conversation with: [ to :: list(enemyCommander), protocol :: 'fipa-contract-net', 
+				performative :: 'inform', contents :: ["intruderAlert", name, alliance, location] ];
+				forbiddenZoneNotified <- true;
 			}
 		}
 		do goto target:targetPoint speed: speed;
@@ -486,16 +494,13 @@ species Soldier skills:[moving, fipa] {
 				if (!self.injured) {
 					if (!myself.fighting and !myself.injured and !self.fighting) {
 						float currentTime <- time;
-						myself.readyToFight <- true;
 						myself.fighting <- true;
 						myself.bullets <- myself.bullets - 1;
 						myself.positionInFight <- location;
 						myself.targetPoint <- location;
 						myself.timeInFight <- currentTime;
 						myself.opponent <- self;
-						myself.leadingFight <- true;
 						self.bullets <- self.bullets - 1;
-						self.readyToFight <- true;
 						self.fighting <- true;
 						self.positionInFight <- location;
 						self.targetPoint <- location;
@@ -742,12 +747,10 @@ species Soldier skills:[moving, fipa] {
 			}
 		}
 		if targetPoint != nil and distance_to (location, targetPoint) = 0 {
-			write name + ": my targetPoint is " + targetPoint;
 			inField <- true;
 			battleIsHappening <- true;
 			write name + " has arrived to replace " + deadSoldier color: agentColor;
 			initialPosition <- location;
-			//deadSoldier <- nil;
 			do resetControlVariables;
 		}
 	}
@@ -1129,19 +1132,19 @@ experiment BattleField type: gui {
 			species Provisions aspect: base;
        	}
        	//Chart used to display overall Army Health. Provides an estimate of who is winning the battle
-       	display ArmyHealth type: opengl {
-       		chart "Army Health" type: pie {
-				data "Alliance #1" value: armyHealthAlliance1 color: #green;
-				data "Alliance #2" value: armyHealthAlliance2 color: #red;
-			}
-       	}
+//       	display ArmyHealth type: opengl {
+//       		chart "Army Health" type: pie {
+//				data "Alliance #1" value: armyHealthAlliance1 color: #green;
+//				data "Alliance #2" value: armyHealthAlliance2 color: #red;
+//			}
+//       	}
    		//Chart used to display opposing Commanders' Health. Provides an estimate of who is winning the battle
-   		display CommanderHealth type: opengl {
-			chart "Commander Health" type: pie {
-				data "Alliance #1" value: commanderHealthAlliance1 color: #green;
-				data "Alliance #2" value: commanderHealthAlliance2 color: #red;
-			}
-   		}
+//   		display CommanderHealth type: opengl {
+//			chart "Commander Health" type: pie {
+//				data "Alliance #1" value: commanderHealthAlliance1 color: #green;
+//				data "Alliance #2" value: commanderHealthAlliance2 color: #red;
+//			}
+//   		}
     }
     
 }
